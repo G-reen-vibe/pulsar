@@ -48,6 +48,9 @@ def main():
     p.add_argument("--norm_type", type=str, default="membrane", choices=["membrane", "batch", "layer", "none"])
     p.add_argument("--num_spike_levels", type=int, default=2)
     p.add_argument("--residual", action="store_true", default=False)
+    p.add_argument("--dropout", type=float, default=0.0)
+    p.add_argument("--spike_mode", type=str, default="gumbel", choices=["gumbel", "deterministic"])
+    p.add_argument("--spike_l1", type=float, default=0.0)
     p.add_argument("--weight_decay", type=float, default=0.0)
     p.add_argument("--optimizer", type=str, default="adam")
     p.add_argument("--dataset", type=str, default="shd")
@@ -94,6 +97,7 @@ def main():
             anneal_warmup_frac=args.anneal_warmup,
             eval_every=2,
             log_every=100,
+            spike_l1=args.spike_l1,
         )
 
         if is_shd:
@@ -116,6 +120,8 @@ def main():
                 norm_type=args.norm_type,
                 num_spike_levels=args.num_spike_levels,
                 residual=args.residual,
+                dropout=args.dropout,
+                spike_mode=args.spike_mode,
             )
         else:
             model = MODEL_REGISTRY["pulsar_cnn"](

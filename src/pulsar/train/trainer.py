@@ -60,6 +60,9 @@ class TrainConfig:
     # ANN-to-SNN specific
     ann_to_snn_T: int = 16  # timesteps at SNN inference
 
+    # Round 20: spike rate L1 regularization weight
+    spike_l1: float = 0.0
+
     # Resource
     num_workers: int = 0
     log_every: int = 50  # log to stdout every N batches
@@ -176,6 +179,13 @@ class Trainer:
                 opt.zero_grad()
                 logits = model(x)
                 loss = loss_fn(logits, y)
+                # Round 20: spike rate regularization (L1 on spike rates)
+                # Model can expose get_spike_rates() -> list of tensors.
+                if hasattr(model, "get_spike_rates") and cfg.spike_l1 > 0:
+                    rates = model.get_spike_rates()
+                    if rates:
+                        l1_reg = sum(r.abs().mean() for r in rates) / len(rates)
+                        loss = loss + cfg.spike_l1 * l1_reg
                 loss.backward()
                 opt.step()
 

@@ -62,6 +62,7 @@ class PulseLayer(nn.Module):
         learnable_threshold: bool = False,
         recurrent: bool = False,
         num_spike_levels: int = 2,
+        mode: str = "gumbel",  # gumbel | deterministic
     ):
         super().__init__()
         assert 0.0 < tau_min <= tau_init, "tau_min must be in (0, tau_init]"
@@ -74,11 +75,10 @@ class PulseLayer(nn.Module):
         self.reset_mode = reset_mode
         self.recurrent = recurrent
         self.num_spike_levels = num_spike_levels
+        self.mode = mode  # Round 18: gumbel | deterministic
         # Spike value levels: 0, 1/(K-1), 2/(K-1), ..., 1
-        self.register_buffer(
-            "spike_values",
-            torch.linspace(0.0, 1.0, num_spike_levels),
-        )
+        # Round 15: make spike levels learnable (init to uniform)
+        self.spike_values = nn.Parameter(torch.linspace(0.0, 1.0, num_spike_levels))
 
         # Round 5: per-neuron learnable threshold
         if learnable_threshold:
@@ -178,33 +178,43 @@ class PulseLayer(nn.Module):
             logits = torch.stack([logits_0, logits_1], dim=-1)
 
             if self.training:
-                tau = float(self.tau.item())
-                soft = F.gumbel_softmax(logits, tau=tau, hard=self.hard, dim=-1)
-                s = soft[..., 1]
+                if self.mode == "gumbel":
+                    tau = float(self.tau.item())
+                    soft = F.gumbel_softmax(logits, tau=tau, hard=self.hard, dim=-1)
+                    s = soft[..., 1]
+                else:  # deterministic
+                    # Annealed sigmoid: steepness = 1/tau. As tau -> 0, sigmoid
+                    # becomes a step function. No Gumbel noise.
+                    tau = float(self.tau.item())
+                    s = torch.sigmoid((V - threshold) / tau)
+                    if self.hard:
+                        s_hard = (s >= 0.5).float()
+                        s = s_hard + s - s.detach()
             else:
                 p = torch.sigmoid(V - threshold)
                 s = (p >= 0.5).float()
         else:
             # Multi-level spike (Round 11): K-way categorical
-            # Logits: [0, V - threshold, 2*(V-threshold), ..., (K-1)*(V-threshold)]
-            # So higher V → higher spike count.
             K = self.num_spike_levels
-            levels = torch.arange(K, device=V.device, dtype=V.dtype)  # (K,)
-            # Logits shape: (*V.shape, K)
-            logits = (V - threshold).unsqueeze(-1) * levels  # broadcast
-            # Add a small bias so level 0 (no spike) is preferred when V ≈ 0
-            # This makes the prior slightly favor "no spike".
-            logits[..., 0] = logits[..., 0] + 0.0  # could add bias here
+            levels = torch.arange(K, device=V.device, dtype=V.dtype)
+            logits = (V - threshold).unsqueeze(-1) * levels
 
             if self.training:
-                tau = float(self.tau.item())
-                soft = F.gumbel_softmax(logits, tau=tau, hard=self.hard, dim=-1)
-                # Weighted sum of spike values: s = sum_k(soft_k * value_k)
-                s = (soft * self.spike_values).sum(dim=-1)
+                if self.mode == "gumbel":
+                    tau = float(self.tau.item())
+                    soft = F.gumbel_softmax(logits, tau=tau, hard=self.hard, dim=-1)
+                    s = (soft * self.spike_values).sum(dim=-1)
+                else:  # deterministic
+                    # Softmax with annealed temperature: sharpness = 1/tau
+                    tau = float(self.tau.item())
+                    soft = F.softmax(logits / tau, dim=-1)
+                    s = (soft * self.spike_values).sum(dim=-1)
+                    if self.hard:
+                        # STE: hard argmax forward, soft backward
+                        idx = logits.argmax(dim=-1)
+                        s_hard = self.spike_values[idx]
+                        s = s_hard + s - s.detach()
             else:
-                # Deterministic: pick the level with highest logit
-                # Equivalent to: s = round(sigmoid(V-threshold) * (K-1)) / (K-1)
-                # But argmax is cleaner.
                 idx = logits.argmax(dim=-1)
                 s = self.spike_values[idx]
 

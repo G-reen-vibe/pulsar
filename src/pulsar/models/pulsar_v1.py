@@ -68,6 +68,8 @@ class PulsarMLP(nn.Module):
         norm_type: str = "membrane",
         num_spike_levels: int = 2,
         residual: bool = False,
+        dropout: float = 0.0,
+        spike_mode: str = "gumbel",
     ):
         super().__init__()
         self.T = T
@@ -108,9 +110,12 @@ class PulsarMLP(nn.Module):
                 stateful=pulse_stateful, decay_init=decay_init,
                 num_features=d, learnable_threshold=learnable_threshold,
                 recurrent=recurrent, num_spike_levels=num_spike_levels,
+                mode=spike_mode,
             )
             for d in hidden_dims
         ])
+        # Round 16: dropout between layers
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else None
 
         if stateful:
             # Learnable membrane decay per layer, reparameterized.
@@ -131,6 +136,12 @@ class PulsarMLP(nn.Module):
         for p in self.pulses:
             p.set_tau(tau)
 
+    def get_spike_rates(self):
+        """Return list of recent spike rate tensors (for L1 regularization)."""
+        # Return the spike outputs from the last forward pass.
+        # We store them in self._last_spikes during forward.
+        return getattr(self, "_last_spikes", [])
+
     def anneal_to(self, progress: float):
         for p in self.pulses:
             p.anneal_to(progress)
@@ -149,6 +160,7 @@ class PulsarMLP(nn.Module):
         out_spikes = []
 
         self.reset_state()
+        self._last_spikes = []  # for L1 regularization
         for t in range(self.T):
             s = spikes[t]
             for i, (lin, norm, pulse) in enumerate(zip(self.linears, self.norms, self.pulses)):
@@ -164,6 +176,12 @@ class PulsarMLP(nn.Module):
                 if self.residual and s.shape == V.shape:
                     V = V + s
                 s = pulse(V)
+                # Round 16: dropout on spike output
+                if self.dropout is not None:
+                    s = self.dropout(s)
+                # Store for L1 reg (only last timestep to save memory)
+                if t == self.T - 1:
+                    self._last_spikes.append(s)
             out_spikes.append(s)
 
         out = torch.stack(out_spikes, dim=0)  # (T, B, F)
