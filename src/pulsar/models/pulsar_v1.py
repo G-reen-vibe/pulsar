@@ -60,12 +60,21 @@ class PulsarMLP(nn.Module):
         decoder: str = "attention",
         stateful: bool = False,
         input_is_spike_train: bool = False,
+        hard: bool = True,
+        pulse_stateful: bool = False,
+        decay_init: float = 0.9,
+        learnable_threshold: bool = False,
+        recurrent: bool = False,
+        norm_type: str = "membrane",
+        num_spike_levels: int = 2,
+        residual: bool = False,
     ):
         super().__init__()
         self.T = T
         self.in_features = in_features
         self.stateful = stateful
         self.input_is_spike_train = input_is_spike_train
+        self.residual = residual
 
         if input_is_spike_train:
             self.encoder = None
@@ -82,12 +91,25 @@ class PulsarMLP(nn.Module):
         self.linears = nn.ModuleList([
             nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)
         ])
-        self.norms = nn.ModuleList([
-            MembraneNorm(d) for d in hidden_dims
-        ])
+        # Round 7: support different norm types
+        if norm_type == "membrane":
+            self.norms = nn.ModuleList([MembraneNorm(d) for d in hidden_dims])
+        elif norm_type == "batch":
+            self.norms = nn.ModuleList([nn.BatchNorm1d(d) for d in hidden_dims])
+        elif norm_type == "layer":
+            self.norms = nn.ModuleList([nn.LayerNorm(d) for d in hidden_dims])
+        elif norm_type == "none":
+            self.norms = nn.ModuleList([nn.Identity() for d in hidden_dims])
+        else:
+            raise ValueError(f"bad norm_type: {norm_type}")
         self.pulses = nn.ModuleList([
-            PulseLayer(tau_init=tau_init, tau_min=tau_min)
-            for _ in hidden_dims
+            PulseLayer(
+                tau_init=tau_init, tau_min=tau_min, hard=hard,
+                stateful=pulse_stateful, decay_init=decay_init,
+                num_features=d, learnable_threshold=learnable_threshold,
+                recurrent=recurrent, num_spike_levels=num_spike_levels,
+            )
+            for d in hidden_dims
         ])
 
         if stateful:
@@ -115,6 +137,8 @@ class PulsarMLP(nn.Module):
 
     def reset_state(self):
         self._V_states = [None] * len(self.pulses)
+        for p in self.pulses:
+            p.reset_state()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: (B, in_features) OR (B, T, in_features). Returns (B, num_classes)."""
@@ -136,6 +160,9 @@ class PulsarMLP(nn.Module):
                         self._V_states[i] = torch.zeros_like(V)
                     self._V_states[i] = alpha * self._V_states[i] + (1 - alpha) * V
                     V = self._V_states[i]
+                # Round 13: residual connection (add input spikes to V before spike)
+                if self.residual and s.shape == V.shape:
+                    V = V + s
                 s = pulse(V)
             out_spikes.append(s)
 
@@ -187,7 +214,7 @@ class PulsarCNN(nn.Module):
         pooled = input_size // 8
         self.fc = nn.Linear(width * 4 * pooled * pooled, 128)
         self.norm_fc = MembraneNorm(128)
-        self.pulse_fc = PulseLayer(tau_init=tau_init, tau_min=tau_min)
+        self.pulse_fc = PulseLayer(tau_init=tau_init, tau_min=tau_min, hard=False)
 
         if stateful:
             self.alphas = nn.ParameterList([
