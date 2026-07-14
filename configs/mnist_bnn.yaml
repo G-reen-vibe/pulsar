@@ -1,0 +1,27 @@
+# MNIST + BNN baseline (CNN)
+experiment_name: mnist_bnn
+seeds: [42, 123, 7]
+
+dataset:
+  name: mnist
+  kwargs:
+    batch_size: 128
+    flatten: false
+
+model:
+  name: bnn_cnn
+  kwargs:
+    in_channels: 1
+    num_classes: null
+    width: 16
+    input_size: 28
+    mode: zero_one
+
+train:
+  epochs: 15
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.0001
+  optimizer: adam
+  eval_every: 1
+  log_every: 50

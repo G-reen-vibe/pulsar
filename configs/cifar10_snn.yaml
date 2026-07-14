@@ -1,0 +1,30 @@
+# CIFAR-10 + SNN baseline (CNN, surrogate gradient LIF, T=4)
+experiment_name: cifar10_snn
+seeds: [42, 123, 7]
+
+dataset:
+  name: cifar10
+  kwargs:
+    batch_size: 128
+
+model:
+  name: snn_cnn
+  kwargs:
+    in_channels: 3
+    num_classes: null
+    T: 4
+    width: 32
+    input_size: 32
+    decay: 0.95
+    threshold: 1.0
+    beta: 5.0
+    encoder: poisson
+
+train:
+  epochs: 30
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.0
+  optimizer: adam
+  eval_every: 1
+  log_every: 50

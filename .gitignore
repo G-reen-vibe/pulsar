@@ -24,8 +24,13 @@ datasets/
 *.npy
 *.npz
 *.h5
+*.hdf5
 *.pt
 *.ckpt
+*.zip.tmp
+
+# Results (regenerable)
+results/
 
 # Logs
 logs/

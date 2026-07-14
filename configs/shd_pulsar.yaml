@@ -1,0 +1,34 @@
+# SHD + Pulsar v1 (MLP)
+experiment_name: shd_pulsar
+seeds: [42, 123, 7]
+
+dataset:
+  name: shd
+  kwargs:
+    T: 8
+    batch_size: 64
+
+model:
+  name: pulsar_mlp
+  kwargs:
+    in_features: null  # auto-filled = 700
+    hidden_dims: [256, 128]
+    num_classes: null  # auto-filled = 20
+    T: 8
+    tau_init: 1.0
+    tau_min: 0.1
+    encoder: poisson  # ignored when input_is_spike_train=true
+    decoder: attention
+    stateful: false
+    input_is_spike_train: true  # SHD provides (B, T, C) spike trains
+
+train:
+  epochs: 40
+  batch_size: 64
+  lr: 0.001
+  weight_decay: 0.0
+  optimizer: adam
+  anneal_schedule: cosine
+  anneal_warmup_frac: 0.1
+  eval_every: 1
+  log_every: 10

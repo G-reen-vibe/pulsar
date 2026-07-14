@@ -1,0 +1,31 @@
+# Fashion-MNIST + SNN baseline (CNN, surrogate gradient LIF, T=4)
+experiment_name: fashion_snn
+seeds: [42, 123, 7]
+
+dataset:
+  name: fashion
+  kwargs:
+    batch_size: 128
+    flatten: false
+
+model:
+  name: snn_cnn
+  kwargs:
+    in_channels: 1
+    num_classes: null
+    T: 4
+    width: 16
+    input_size: 28
+    decay: 0.95
+    threshold: 1.0
+    beta: 5.0
+    encoder: poisson
+
+train:
+  epochs: 15
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.0
+  optimizer: adam
+  eval_every: 1
+  log_every: 50

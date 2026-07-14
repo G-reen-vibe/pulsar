@@ -1,0 +1,13 @@
+# Core ML stack
+torch>=2.0
+torchvision>=0.15
+numpy>=1.24
+
+# Scientific
+scipy>=1.10
+matplotlib>=3.6
+h5py>=3.8
+
+# Utilities
+pyyaml>=6.0
+tqdm>=4.65

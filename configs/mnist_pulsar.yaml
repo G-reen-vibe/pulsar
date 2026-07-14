@@ -1,0 +1,34 @@
+# MNIST + Pulsar v1 (CNN, Gumbel-softmax, T=4)
+experiment_name: mnist_pulsar
+seeds: [42, 123, 7]
+
+dataset:
+  name: mnist
+  kwargs:
+    batch_size: 128
+    flatten: false
+
+model:
+  name: pulsar_cnn
+  kwargs:
+    in_channels: 1
+    num_classes: null
+    T: 4
+    width: 16
+    input_size: 28
+    tau_init: 1.0
+    tau_min: 0.1
+    encoder: poisson
+    decoder: attention
+    stateful: false
+
+train:
+  epochs: 15
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.0
+  optimizer: adam
+  anneal_schedule: cosine
+  anneal_warmup_frac: 0.1
+  eval_every: 1
+  log_every: 50

@@ -1,0 +1,35 @@
+# Quick SHD test config (1 seed, 5 epochs) for pipeline validation
+# Real experiments use 3+ seeds and more epochs.
+experiment_name: shd_pulsar_quick
+seeds: [42, 123]
+
+dataset:
+  name: shd
+  kwargs:
+    T: 8
+    batch_size: 64
+
+model:
+  name: pulsar_mlp
+  kwargs:
+    in_features: null
+    hidden_dims: [256, 128]
+    num_classes: null
+    T: 8
+    tau_init: 1.0
+    tau_min: 0.1
+    encoder: poisson
+    decoder: attention
+    stateful: false
+    input_is_spike_train: true
+
+train:
+  epochs: 5
+  batch_size: 64
+  lr: 0.001
+  weight_decay: 0.0
+  optimizer: adam
+  anneal_schedule: cosine
+  anneal_warmup_frac: 0.1
+  eval_every: 1
+  log_every: 20

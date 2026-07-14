@@ -1,0 +1,29 @@
+# CIFAR-10 + ANN-to-SNN conversion baseline
+experiment_name: cifar10_ann_to_snn
+seeds: [42, 123, 7]
+
+dataset:
+  name: cifar10
+  kwargs:
+    batch_size: 128
+
+model:
+  name: ann_to_snn_cnn
+  kwargs:
+    in_channels: 3
+    num_classes: null
+    width: 32
+    input_size: 32
+    T: 16
+    decay: 0.95
+    threshold: 1.0
+    beta: 5.0
+
+train:
+  epochs: 30
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.0001
+  optimizer: adam
+  eval_every: 1
+  log_every: 50
