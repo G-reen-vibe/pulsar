@@ -51,6 +51,9 @@ def main():
     p.add_argument("--dropout", type=float, default=0.0)
     p.add_argument("--spike_mode", type=str, default="gumbel", choices=["gumbel", "deterministic"])
     p.add_argument("--spike_l1", type=float, default=0.0)
+    p.add_argument("--leaky", type=float, default=0.0)
+    p.add_argument("--membrane_readout", action="store_true", default=False)
+    p.add_argument("--output_mode", type=str, default="spike", choices=["spike", "gate"])
     p.add_argument("--weight_decay", type=float, default=0.0)
     p.add_argument("--optimizer", type=str, default="adam")
     p.add_argument("--dataset", type=str, default="shd")
@@ -122,6 +125,9 @@ def main():
                 residual=args.residual,
                 dropout=args.dropout,
                 spike_mode=args.spike_mode,
+                leaky=args.leaky,
+                membrane_readout=args.membrane_readout,
+                output_mode=args.output_mode,
             )
         else:
             model = MODEL_REGISTRY["pulsar_cnn"](

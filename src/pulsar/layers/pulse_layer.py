@@ -1,28 +1,30 @@
-"""PulseLayer — Pulsar's spike layer based on Gumbel-softmax reparameterization.
+"""PulseLayer — Pulsar's spike layer.
 
-This is the core contribution. Instead of using a fixed surrogate gradient
-(sigmoid, atan, fast-sigmoid, etc.) we treat the spike as a Bernoulli sample
-from a rate `σ(V)` and use the **Gumbel-softmax (concrete) reparameterization**
-to backpropagate through it.
+Round 25 pivot: Spike-Gated Network (SGN).
 
-Why Gumbel-softmax over surrogate gradients?
-- *Principled*: defines a proper differentiable density over the simplex.
-- *Annealable*: temperature τ controls the discretization.
-- *No train/test mismatch*: at test time we sample exactly the same way.
+Previous approach (Rounds 1-24): spikes ARE the output. The discrete spike
+train is what the next layer consumes. This creates an information bottleneck.
 
-The forward pass (training):
-    s_soft = softmax((log p + g) / τ)   where g ~ Gumbel(0,1), p = [σ(V), 1-σ(V)]
-    s_hard = one_hot(argmax(s_soft))    (only if hard=True)
-    s = s_hard - s_soft.detach() + s_soft                # straight-through
+New approach (R25+): spikes GATE the continuous membrane potential. The output
+is `out = V * gate(s)` where:
+- V is the continuous membrane potential (carries gradients)
+- s is the discrete spike (provides sparse modulation)
+- gate(s) maps spikes to [0, 1] gating values
 
-The forward pass (inference / eval):
-    s = (σ(V) >= 0.5).float()                             # deterministic hard spike
+This keeps the SNN character (spikes are real, discrete events) while solving
+the information bottleneck (continuous values carry the actual information).
 
-Stateful mode (Round 3+):
-    V_t = decay * V_{t-1} + (1 - decay) * x_t             # membrane update
-    s_t = spike(V_t)
-    V_t = V_t - s_t * threshold                           # subtractive reset
-The decay is a learnable parameter (reparameterized via sigmoid).
+The spike function itself supports:
+- Gumbel-softmax (original, R1-R17)
+- Deterministic annealed sigmoid (R18+)
+- Multi-level spikes (K levels, R11+)
+- Stateful membrane with learnable decay (R3+)
+- Recurrent feedback s_{t-1} -> V_t (R6+)
+- Leaky blend (R21+)
+
+The gating can be:
+- "spike" (original): output = s (the spike itself)
+- "gate" (R25+): output = V * gate(s) (spike gates the membrane)
 """
 from __future__ import annotations
 
@@ -63,6 +65,8 @@ class PulseLayer(nn.Module):
         recurrent: bool = False,
         num_spike_levels: int = 2,
         mode: str = "gumbel",  # gumbel | deterministic
+        leaky: float = 0.0,  # Round 21: blend factor for soft gradient highway
+        output_mode: str = "spike",  # Round 25: "spike" (output=s) or "gate" (output=V*gate(s))
     ):
         super().__init__()
         assert 0.0 < tau_min <= tau_init, "tau_min must be in (0, tau_init]"
@@ -76,6 +80,8 @@ class PulseLayer(nn.Module):
         self.recurrent = recurrent
         self.num_spike_levels = num_spike_levels
         self.mode = mode  # Round 18: gumbel | deterministic
+        self.leaky = float(leaky)  # Round 21
+        self.output_mode = output_mode  # Round 25: spike | gate
         # Spike value levels: 0, 1/(K-1), 2/(K-1), ..., 1
         # Round 15: make spike levels learnable (init to uniform)
         self.spike_values = nn.Parameter(torch.linspace(0.0, 1.0, num_spike_levels))
@@ -183,18 +189,22 @@ class PulseLayer(nn.Module):
                     soft = F.gumbel_softmax(logits, tau=tau, hard=self.hard, dim=-1)
                     s = soft[..., 1]
                 else:  # deterministic
-                    # Annealed sigmoid: steepness = 1/tau. As tau -> 0, sigmoid
-                    # becomes a step function. No Gumbel noise.
                     tau = float(self.tau.item())
-                    s = torch.sigmoid((V - threshold) / tau)
+                    s_soft = torch.sigmoid((V - threshold) / tau)
                     if self.hard:
-                        s_hard = (s >= 0.5).float()
-                        s = s_hard + s - s.detach()
+                        s_hard = (s_soft >= 0.5).float()
+                        s = s_hard + s_soft - s_soft.detach()
+                    else:
+                        s = s_soft
+                    # Round 21: leaky blend — add a small soft component to the
+                    # hard spike output. This gives a gradient highway even when
+                    # the hard spike is mostly off.
+                    if self.leaky > 0:
+                        s = s + self.leaky * s_soft
             else:
                 p = torch.sigmoid(V - threshold)
                 s = (p >= 0.5).float()
         else:
-            # Multi-level spike (Round 11): K-way categorical
             K = self.num_spike_levels
             levels = torch.arange(K, device=V.device, dtype=V.dtype)
             logits = (V - threshold).unsqueeze(-1) * levels
@@ -205,15 +215,18 @@ class PulseLayer(nn.Module):
                     soft = F.gumbel_softmax(logits, tau=tau, hard=self.hard, dim=-1)
                     s = (soft * self.spike_values).sum(dim=-1)
                 else:  # deterministic
-                    # Softmax with annealed temperature: sharpness = 1/tau
                     tau = float(self.tau.item())
                     soft = F.softmax(logits / tau, dim=-1)
-                    s = (soft * self.spike_values).sum(dim=-1)
+                    s_soft = (soft * self.spike_values).sum(dim=-1)
                     if self.hard:
-                        # STE: hard argmax forward, soft backward
                         idx = logits.argmax(dim=-1)
                         s_hard = self.spike_values[idx]
-                        s = s_hard + s - s.detach()
+                        s = s_hard + s_soft - s_soft.detach()
+                    else:
+                        s = s_soft
+                    # Round 21: leaky blend
+                    if self.leaky > 0:
+                        s = s + self.leaky * s_soft
             else:
                 idx = logits.argmax(dim=-1)
                 s = self.spike_values[idx]
@@ -228,4 +241,12 @@ class PulseLayer(nn.Module):
         elif self.stateful and self.reset_mode == "zero":
             self._V = self._V * (1.0 - s)
 
-        return s
+        # Round 25: output mode
+        if self.output_mode == "spike":
+            return s
+        elif self.output_mode == "gate":
+            # Spike gates the membrane potential. The spike value s is in [0,1]
+            # (or 0/1 in hard mode). Use it as a multiplicative gate on V.
+            return V * s
+        else:
+            raise ValueError(f"bad output_mode: {self.output_mode}")

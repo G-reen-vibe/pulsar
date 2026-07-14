@@ -70,6 +70,9 @@ class PulsarMLP(nn.Module):
         residual: bool = False,
         dropout: float = 0.0,
         spike_mode: str = "gumbel",
+        leaky: float = 0.0,
+        membrane_readout: bool = False,
+        output_mode: str = "spike",  # R25: spike | gate
     ):
         super().__init__()
         self.T = T
@@ -77,6 +80,7 @@ class PulsarMLP(nn.Module):
         self.stateful = stateful
         self.input_is_spike_train = input_is_spike_train
         self.residual = residual
+        self.membrane_readout = membrane_readout
 
         if input_is_spike_train:
             self.encoder = None
@@ -110,7 +114,7 @@ class PulsarMLP(nn.Module):
                 stateful=pulse_stateful, decay_init=decay_init,
                 num_features=d, learnable_threshold=learnable_threshold,
                 recurrent=recurrent, num_spike_levels=num_spike_levels,
-                mode=spike_mode,
+                mode=spike_mode, leaky=leaky, output_mode=output_mode,
             )
             for d in hidden_dims
         ])
@@ -131,6 +135,10 @@ class PulsarMLP(nn.Module):
             self.decoder = AttentionDecoder(hidden_dims[-1], num_classes)
         else:
             raise ValueError(f"bad decoder: {decoder}")
+
+        # Round 23: membrane readout projection
+        if membrane_readout:
+            self.readout_proj = nn.Linear(hidden_dims[-1] * 2, hidden_dims[-1])
 
     def set_tau(self, tau: float):
         for p in self.pulses:
@@ -158,6 +166,7 @@ class PulsarMLP(nn.Module):
         else:
             spikes = self.encoder(x)
         out_spikes = []
+        out_membranes = []  # Round 23: track membrane potentials
 
         self.reset_state()
         self._last_spikes = []  # for L1 regularization
@@ -175,6 +184,9 @@ class PulsarMLP(nn.Module):
                 # Round 13: residual connection (add input spikes to V before spike)
                 if self.residual and s.shape == V.shape:
                     V = V + s
+                # Round 23: store membrane potential of last layer for readout
+                if i == len(self.linears) - 1:
+                    out_membranes.append(V)
                 s = pulse(V)
                 # Round 16: dropout on spike output
                 if self.dropout is not None:
@@ -185,6 +197,12 @@ class PulsarMLP(nn.Module):
             out_spikes.append(s)
 
         out = torch.stack(out_spikes, dim=0)  # (T, B, F)
+        # Round 23: blend spike-based and membrane-based readout
+        if self.membrane_readout:
+            mem = torch.stack(out_membranes, dim=0)  # (T, B, F)
+            combined = torch.cat([out, mem], dim=-1)  # (T, B, 2F)
+            combined = self.readout_proj(combined)
+            return self.decoder(combined)
         return self.decoder(out)
 
 
